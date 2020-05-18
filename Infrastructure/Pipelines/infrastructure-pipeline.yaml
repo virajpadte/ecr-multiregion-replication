@@ -1,0 +1,206 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: Template for deploying Infrastructure Deployment Pipeline in AWS.
+
+Parameters:
+
+    pPipelineName:
+      Default:  ecr-replication-pipeline
+      Description: A name for pipeline
+      Type: String
+
+    pS3Bucket:
+      Default: ecr-replication-pipeline-artifacts
+      Description: The name of the S3 bucket that contains the source artifact, which must be in the same region as this stack
+      Type: String
+
+    pSourceS3Key:
+      Default: Infrastructure/Zips/deployment.zip
+      Description: The file name of the source artifact
+      Type: String
+
+    pTemplateFileName:
+      Default: master.yaml
+      Description: The file name of the template
+      Type: String
+
+    pStackName:
+      Default: ecr-multiregion-replication-stack
+      Description: A name for the dev stack
+      Type: String
+
+    pStackConfig:
+      Default: config.json
+      Description: The configuration file name for the stack
+      Type: String
+
+    pChangeSetName:
+      Default: UpdatePreview-Template
+      Description: A name for the stack change set
+      Type: String
+
+Metadata:
+
+    AWS::CloudFormation::Interface:
+      ParameterGroups:
+        - Label:
+            default: "CodePipeline Settings"
+          Parameters:
+            - pPipelineName
+            - pS3Bucket
+            - pSourceS3Key
+            - pEmail
+        - Label:
+            default: "Test Stack Settings"
+          Parameters:
+            - pTemplateFileName
+        - Label:
+            default: "Dev Stack Settings"
+          Parameters:
+            - pChangeSetName
+            - pStackName
+            - pStackConfig
+
+Resources:
+
+    rArtifactStoreBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        VersioningConfiguration:
+          Status: Enabled
+
+    rPipeline:
+      Type: AWS::CodePipeline::Pipeline
+      DependsOn: rPipelineRole
+      Properties:
+        ArtifactStore:
+          Location: !Ref 'rArtifactStoreBucket'
+          Type: S3
+        DisableInboundStageTransitions: []
+        Name: !Ref 'pPipelineName'
+        RoleArn: !GetAtt [rPipelineRole, Arn]
+        Stages:
+          - Name: S3Source
+            Actions:
+              - Name: TemplateSource
+                ActionTypeId:
+                  Category: Source
+                  Owner: AWS
+                  Provider: S3
+                  Version: '1'
+                Configuration:
+                  S3Bucket: !Ref 'pS3Bucket'
+                  S3ObjectKey: !Ref 'pSourceS3Key'
+                OutputArtifacts:
+                  - Name: TemplateSource
+                RunOrder: '1'
+          - Name: DeployStage
+            Actions:
+              - Name: CreateChangeSet
+                ActionTypeId:
+                  Category: Deploy
+                  Owner: AWS
+                  Provider: CloudFormation
+                  Version: '1'
+                InputArtifacts:
+                  - Name: TemplateSource
+                Configuration:
+                  ActionMode: CHANGE_SET_REPLACE
+                  RoleArn: !GetAtt [rCFNRole, Arn]
+                  StackName: !Ref pStackName
+                  ChangeSetName: !Ref pChangeSetName
+                  TemplateConfiguration: !Sub "TemplateSource::${pStackConfig}"
+                  TemplatePath: !Sub "TemplateSource::${pTemplateFileName}"
+                  Capabilities: CAPABILITY_NAMED_IAM
+                RunOrder: '1'
+              - Name: ApproveChangeSet
+                ActionTypeId:
+                  Category: Approval
+                  Owner: AWS
+                  Provider: Manual
+                  Version: '1'
+                RunOrder: '2'
+              - Name: ExecuteChangeSet
+                ActionTypeId:
+                  Category: Deploy
+                  Owner: AWS
+                  Provider: CloudFormation
+                  Version: '1'
+                Configuration:
+                  ActionMode: CHANGE_SET_EXECUTE
+                  ChangeSetName: !Ref pChangeSetName
+                  RoleArn: !GetAtt [rCFNRole, Arn]
+                  StackName: !Ref pStackName
+                  Capabilities: CAPABILITY_NAMED_IAM
+                RunOrder: '3'
+
+    rCFNRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ecr-replication-pipeline-stage-role
+        AssumeRolePolicyDocument:
+          Statement:
+          - Action: ['sts:AssumeRole']
+            Effect: Allow
+            Principal:
+              Service: [cloudformation.amazonaws.com]
+          Version: '2012-10-17'
+        Path: /
+        Policies:
+          - PolicyName: CloudFormationRole
+            # TODO: Lock this down to include only needed permissions
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Action:
+                    - "*"
+                  Effect: Allow
+                  Resource: '*'
+
+    rPipelineRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ecr-replication-pipeline-role
+        AssumeRolePolicyDocument:
+          Statement:
+          - Action: ['sts:AssumeRole']
+            Effect: Allow
+            Principal:
+              Service: [codepipeline.amazonaws.com]
+          Version: '2012-10-17'
+        Path: /
+        Policies:
+          - PolicyName: CodePipelineAccess
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Action:
+                  - 'iam:PassRole'
+                  - 'cloudformation:CreateStack'
+                  - 'cloudformation:DescribeStacks'
+                  - 'cloudformation:DeleteStack'
+                  - 'cloudformation:UpdateStack'
+                  - 'cloudformation:CreateChangeSet'
+                  - 'cloudformation:ExecuteChangeSet'
+                  - 'cloudformation:DeleteChangeSet'
+                  - 'cloudformation:DescribeChangeSet'
+                  - 'cloudformation:SetStackPolicy'
+                  Effect: Allow
+                  Resource: '*'
+                - Action:
+                  - 's3:*'
+                  Effect: Allow
+                  Resource: "arn:aws:s3:::ecr-replication-pipeline-artifacts"
+
+Outputs:
+    rPipelineRole:
+        Description: Arn of the rPipelineRole
+        Value: !GetAtt rPipelineRole.Arn
+        Export:
+            Name: ecr-replication-pipeline-role
+
+    rCFNRole:
+        Description: Arn of the rCFNRole
+        Value: !GetAtt rCFNRole.Arn
+        Export:
+            Name: ecr-replication-pipeline-stage-role
