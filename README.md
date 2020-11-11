@@ -35,13 +35,13 @@ docker tag python:3-alpine <account-id>.dkr.ecr.ap-southeast-1.amazonaws.com/mul
 Step 3: Login to us-east-1
 
 ```bash
-aws ecr get-login-password --profile dd-ecr --region us-east-1 | docker login --username AWS --password-stdin https://<account-id>.dkr.ecr.us-east-1.amazonaws.com
+aws ecr get-login-password --profile <sandbox-profile> --region us-east-1 | docker login --username AWS --password-stdin https://<account-id>.dkr.ecr.us-east-1.amazonaws.com
 ```
 
 Step 4: Create ecr repository
 
 ```bash
-aws ecr create-repository --repository-name multiregion-ecr-test-src-us-east-1 --profile=dd-ecr --region us-east-1
+aws ecr create-repository --repository-name multiregion-ecr-test-src-us-east-1 --profile=<sandbox-profile>  --region us-east-1
 ```
 
 Step 5: Push image to newly created ECR repository
